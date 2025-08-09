@@ -2,6 +2,55 @@
 
 This guide will help you configure the Simple Timesheet application as a service provider with Google API integration.
 
+## 🔐 Understanding Google Authentication Types
+
+### Two Types of Google Authentication
+
+#### 1. **OAuth 2.0 Client (User Authentication)**
+**Purpose**: Authenticates individual users who log into your timesheet application
+
+**What it does**:
+- Allows users to "Sign in with Google" 
+- Grants access to user's Google account data (email, profile, Google Sheets in their Drive)
+- Users see a consent screen asking for permissions
+- Each user controls their own data
+
+#### 2. **Service Account (Application Authentication)**  
+**Purpose**: Authenticates your application itself to perform server-side operations
+
+**What it does**:
+- Allows your backend to access Google APIs without user interaction
+- Used for creating shared templates, administrative tasks
+- Operates with its own Google Drive account
+- No user consent screens - operates automatically
+
+### 🔄 Data Flow Architecture
+
+#### User Authentication Flow:
+```
+Staff Member → OAuth Login → Google Consent → Access Token → Your App JWT
+     ↓
+Can create/edit their own Google Sheets
+```
+
+#### Service Account Flow:
+```
+Your Backend → Service Account Key → Google API Access → Administrative Operations
+     ↓
+Can create template sheets, send notifications, perform bulk operations
+```
+
+#### Timesheet Creation Flow:
+```
+1. Staff logs in (OAuth)
+2. Clicks "Create Timesheet" 
+3. Your backend (Service Account) copies template
+4. New sheet created in staff member's Google Drive (using their OAuth token)
+5. Staff fills out timesheet
+6. Staff submits for approval
+7. Supervisor reviews and approves/rejects
+```
+
 ## 🔑 Required Google API Setup
 
 ### Prerequisites
@@ -19,13 +68,116 @@ This guide will help you configure the Simple Timesheet application as a service
 ```
 
 ### 1.2 Enable Required APIs
-Go to **APIs & Services** → **Library** and enable:
-- ✅ **Google Sheets API**
-- ✅ **Google Drive API**
-- ✅ **Gmail API** (optional, for notifications)
-- ✅ **Google OAuth2 API** (automatically enabled)
 
-### 1.3 Create OAuth 2.0 Web Client
+#### **Step-by-Step API Enabling Process:**
+
+1. **Access Google Cloud Console**
+   ```
+   - Go to https://console.cloud.google.com/
+   - Sign in with your Google account
+   - Select your project
+   ```
+
+2. **Navigate to APIs & Services**
+   ```
+   Left sidebar → APIs & Services → Library
+   OR
+   Search "API Library" in the top search bar
+   ```
+
+3. **Enable Each Required API:**
+
+   **Google Sheets API** (Essential):
+   ```
+   1. Search "Google Sheets API" in the library
+   2. Click on "Google Sheets API"
+   3. Click "ENABLE" button
+   4. Wait for confirmation message
+   ```
+
+   **Google Drive API** (Essential):
+   ```
+   1. Search "Google Drive API"
+   2. Click on "Google Drive API"
+   3. Click "ENABLE"
+   4. Wait for confirmation
+   ```
+
+   **Google OAuth2 API** (Usually auto-enabled):
+   ```
+   1. Search "People API" or "Google+ API"
+   2. Click "ENABLE" if not already enabled
+   ```
+
+   **Gmail API** (Optional - for notifications):
+   ```
+   1. Search "Gmail API"
+   2. Click "ENABLE"
+   3. Only needed if sending email notifications
+   ```
+
+4. **Verify APIs are Enabled:**
+   ```
+   Go to APIs & Services → Dashboard
+   You should see all enabled APIs listed with "Enabled" status
+   ```
+
+#### **API Quotas (Free Tier):**
+```
+Google Sheets API: 100 requests per 100 seconds per user
+Google Drive API: 1,000 requests per 100 seconds per user  
+Gmail API: 1,000,000,000 quota units per day
+```
+
+#### **Common API Enabling Errors:**
+
+**❌ "API has not been used before or it is disabled"**
+```bash
+Solution:
+1. Go to API Library
+2. Search for the specific API mentioned in error
+3. Click ENABLE
+4. Wait 5-10 minutes for propagation
+```
+
+**❌ "The request cannot be identified with a user or service account"**
+```bash
+Solution:  
+1. Check credentials are properly loaded
+2. Verify service account JSON file path
+3. Ensure OAuth client ID is correct
+```
+
+**❌ "Daily quota exceeded"**
+```bash
+Solution:
+1. Check APIs & Services → Quotas
+2. Request quota increase if needed
+3. Optimize API calls in your application
+```
+
+### 1.3 Configure OAuth Consent Screen (Required First)
+```bash
+APIs & Services → OAuth consent screen
+
+Configure:
+- User Type: External (for public use) or Internal (G Workspace only)
+- App name: "Simple Timesheet"
+- User support email: your-email@domain.com
+- Developer contact: your-email@domain.com
+
+Scopes to add:
+- ../auth/userinfo.email
+- ../auth/userinfo.profile  
+- ../auth/spreadsheets
+- ../auth/drive.file
+
+Test users (during development):
+- Add your email addresses
+- Add supervisor email addresses
+```
+
+### 1.4 Create OAuth 2.0 Web Client
 1. **APIs & Services** → **Credentials** → **+ CREATE CREDENTIALS** → **OAuth 2.0 Client IDs**
 2. **Application type**: Web application
 3. **Name**: `Simple Timesheet Web Client`
@@ -36,17 +188,21 @@ Go to **APIs & Services** → **Library** and enable:
    ```
 5. **Authorized redirect URIs**:
    ```
-   Development: http://localhost:5185/auth/callback
-   Production:  https://yourdomain.com/auth/callback
+   Development: http://localhost:8095/api/v1/auth/callback
+   Production:  https://yourdomain.com/api/v1/auth/callback
    ```
-6. **Save and copy the Client ID** → Use in frontend `.env`
+6. **Save and copy the Client ID and Client Secret** → Use in backend and frontend `.env`
 
-### 1.4 Create Service Account
+### 1.5 Create Service Account
 1. **APIs & Services** → **Credentials** → **+ CREATE CREDENTIALS** → **Service account**
 2. **Name**: `simple-timesheet-service`
-3. **Role**: Editor (or custom role with Sheets/Drive access)
-4. **Create Key** → **JSON** → Download the file
-5. **Rename** downloaded file to `service-account-key.json`
+3. **Service account ID**: `simple-timesheet-service` (auto-generated)
+4. **Description**: `Backend service for timesheet application`
+5. **Grant roles**: 
+   - Basic → Editor (or create custom role with specific API permissions)
+6. **Create Key** → **JSON** → Download the file
+7. **Important**: Note the service account email from the JSON file (e.g., `simple-timesheet-service@yourproject.iam.gserviceaccount.com`)
+8. **Rename** downloaded file to `service-account-key.json`
 
 ## Step 2: Configure Application Environment
 
@@ -202,38 +358,198 @@ node run-tests.js
 
 ## 🔧 Troubleshooting
 
-### Common Issues:
+### API Enabling Issues:
 
-**❌ "Access blocked" during OAuth**
-- Check redirect URIs in Google Console
-- Ensure JavaScript origins are correct
-- Verify OAuth client type is "Web application"
+**❌ "API has not been used before or it is disabled"**
+```bash
+Solution:
+1. Go to APIs & Services → Library in Google Cloud Console
+2. Search for the specific API mentioned in the error
+3. Click on the API, then click "ENABLE" 
+4. Wait 5-10 minutes for propagation
+5. Test API access again
+```
 
-**❌ "Service account not found"**
-- Check service account JSON file path
-- Verify file permissions in Docker container
-- Ensure service account has required API access
+**❌ "Project does not exist or insufficient permissions"**
+```bash
+Solution:
+1. Verify correct project is selected in Google Cloud Console
+2. Check you have Editor/Owner role on the project
+3. Ensure billing is enabled for production usage
+4. Confirm project ID matches your configuration
+```
+
+### OAuth Authentication Issues:
+
+**❌ "redirect_uri_mismatch" during OAuth**
+```bash
+Root Cause: Mismatch between configured and requested redirect URI
+Solution:
+1. In Google Cloud Console → APIs & Services → Credentials
+2. Edit your OAuth 2.0 Client ID
+3. Ensure exact match in Authorized redirect URIs:
+   - Development: http://localhost:8095/api/v1/auth/callback
+   - Production: https://yourdomain.com/api/v1/auth/callback
+4. Check for trailing slashes and protocol (http vs https)
+```
+
+**❌ "access_denied" during OAuth**
+```bash
+Root Cause: User declined permissions or app not verified
+Solution:
+1. Check OAuth consent screen is properly configured
+2. Ensure all required scopes are added:
+   - ../auth/userinfo.email
+   - ../auth/userinfo.profile
+   - ../auth/spreadsheets
+   - ../auth/drive.file
+3. For development: Add user email to "Test users" list
+4. For production: Submit app for verification
+```
+
+**❌ "invalid_client" error**
+```bash
+Root Cause: Incorrect client credentials
+Solution:
+1. Verify GOOGLE_CLIENT_ID matches Google Console
+2. Verify GOOGLE_CLIENT_SECRET matches Google Console
+3. Ensure OAuth client is configured as "Web application"
+4. Check environment files are loaded correctly
+```
+
+### Service Account Issues:
+
+**❌ "Service account not found" or "Invalid credentials"**
+```bash
+Root Cause: Service account configuration issues
+Solution:
+1. Check service account JSON file path: `/app/credentials/service-account-key.json`
+2. Verify file exists and has proper permissions
+3. Ensure JSON file is valid (not corrupted)
+4. Confirm service account email in JSON matches error messages
+5. Re-download service account key if necessary
+```
 
 **❌ "Insufficient permissions for Google Sheets"**
-- Share template sheet with service account email
-- Grant Editor permissions to service account
-- Check Google Sheets API is enabled
+```bash
+Root Cause: Service account lacks required permissions
+Solution:
+1. Share template sheet with service account email (from JSON file)
+2. Grant "Editor" permissions to service account
+3. Check Google Sheets API is enabled
+4. Verify service account has correct IAM roles in Google Cloud Console
+5. Ensure service account has these roles:
+   - Basic → Editor (or custom role with Sheets/Drive access)
+```
+
+**❌ "Forbidden" or "403 Insufficient Permission"**
+```bash
+Root Cause: Service account lacks API access
+Solution:
+1. Go to IAM & Admin → Service accounts
+2. Verify roles assigned to your service account
+3. Ensure APIs are enabled for service account usage
+4. Check Cloud Console audit logs for detailed error info
+```
+
+### Application Configuration Issues:
 
 **❌ "CORS errors in browser"**
-- Update CORS_ORIGINS in backend .env
-- Restart backend container after changes
-- Check frontend URL matches CORS settings
+```bash
+Root Cause: Frontend and backend CORS mismatch
+Solution:
+1. Update CORS_ORIGINS in backend .env file:
+   CORS_ORIGINS=http://localhost:5185,https://yourdomain.com
+2. Restart backend container after changes
+3. Check frontend URL matches CORS settings exactly
+4. Ensure no trailing slashes in CORS origins
+```
+
+**❌ "Connection refused" or "Network errors"**
+```bash
+Root Cause: Docker containers not running or port conflicts
+Solution:
+1. Check container status: docker-compose ps
+2. Restart services: ./scripts/dev-restart.sh
+3. Check port availability: lsof -i :8095
+4. Review container logs: ./scripts/logs.sh
+```
+
+### Quota and Rate Limiting:
+
+**❌ "Quota exceeded for quota metric"**
+```bash
+Root Cause: API usage exceeded free tier limits
+Solution:
+1. Check APIs & Services → Quotas in Google Cloud Console
+2. Monitor current usage patterns
+3. Implement caching to reduce API calls
+4. Request quota increase for legitimate high usage
+5. Consider upgrading to paid Google Cloud plan
+```
 
 ### Debug Commands:
+
 ```bash
-# Check container logs
+# Check all container status
+docker-compose -f docker-compose.dev.yml ps
+
+# View container logs
 docker-compose -f docker-compose.dev.yml logs
+docker-compose -f docker-compose.dev.yml logs backend
+docker-compose -f docker-compose.dev.yml logs frontend
 
 # Test API endpoints
 curl -H "Authorization: Bearer YOUR_TOKEN" http://localhost:8095/api/v1/users/me
+curl http://localhost:8095/health  # Health check endpoint
 
 # Check database
 sqlite3 backend/db/timesheet.db ".tables"
+sqlite3 backend/db/timesheet.db "SELECT * FROM users;"
+
+# Test Google API access
+python3 -c "
+from googleapiclient.discovery import build
+from google.oauth2.service_account import Credentials
+credentials = Credentials.from_service_account_file('backend/credentials/service-account-key.json')
+service = build('sheets', 'v4', credentials=credentials)
+print('✅ Service account can access Google Sheets API')
+"
+
+# Check environment variables
+docker-compose -f docker-compose.dev.yml exec backend printenv | grep GOOGLE
+
+# Test frontend accessibility
+curl http://localhost:5185
+
+# Check port usage
+lsof -i :5185  # Frontend port
+lsof -i :8095  # Backend port
+```
+
+### Testing Checklist:
+
+```bash
+# 1. Test API Access
+□ Google Sheets API enabled and accessible
+□ Google Drive API enabled and accessible  
+□ Service account credentials valid
+□ OAuth client credentials valid
+
+# 2. Test Authentication Flow
+□ OAuth consent screen configured
+□ User can login with Google
+□ JWT tokens generated correctly
+□ User roles assigned properly
+
+# 3. Test Core Functionality
+□ Staff can create timesheets
+□ Google Sheets created in user's Drive
+□ Supervisor can review submissions
+□ Approval/rejection workflow works
+
+# 4. Test API Endpoints
+node run-tests.js  # Run comprehensive test suite
 ```
 
 ## 🚀 Go Live Checklist

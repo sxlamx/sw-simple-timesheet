@@ -29,39 +29,58 @@ A comprehensive React frontend and FastAPI backend application for recording tim
 
 ## 🛠️ **Setup Instructions**
 
+> **📖 For detailed setup instructions, see [SETUP-GUIDE.md](./SETUP-GUIDE.md)**
+
+### Quick Setup Overview
+
 ### 1. **Google Cloud Platform Setup**
 
-#### Create Google OAuth Credentials:
+#### Enable Required APIs:
 1. Go to [Google Cloud Console](https://console.cloud.google.com/)
-2. Create a new project or select existing
-3. Enable **Google+ API** and **Google Sheets API**
-4. Go to **Credentials** → **Create Credentials** → **OAuth 2.0 Client IDs**
-5. Set **Authorized redirect URIs**:
-   - Development: `http://localhost:8095/api/v1/auth/callback`
-   - Staging: `http://your-staging-domain:8095/api/v1/auth/callback`
+2. Create a new project: "Simple Timesheet"
+3. Navigate to **APIs & Services** → **Library**
+4. Enable these APIs:
+   - ✅ **Google Sheets API**
+   - ✅ **Google Drive API** 
+   - ✅ **People API** (for user authentication)
+   - ✅ **Gmail API** (optional - for notifications)
 
-#### Create Service Account for Sheets API:
-1. Go to **Credentials** → **Create Credentials** → **Service Account**
-2. Download the JSON key file
-3. Save as `credentials/dev-credentials.json` (development)
-4. Save as `credentials/staging-credentials.json` (staging)
+#### Create OAuth 2.0 Credentials (User Authentication):
+1. **APIs & Services** → **OAuth consent screen** → Configure app details
+2. **Credentials** → **Create Credentials** → **OAuth 2.0 Client IDs**
+3. **Application type**: Web application
+4. **Authorized redirect URIs**:
+   - Development: `http://localhost:8095/api/v1/auth/callback`
+   - Production: `https://yourdomain.com/api/v1/auth/callback`
+
+#### Create Service Account (Backend Operations):
+1. **Credentials** → **Create Credentials** → **Service Account**
+2. **Name**: `timesheet-backend-service`
+3. **Role**: Editor (or custom role with Sheets/Drive access)
+4. **Create Key** → **JSON** → Download the file
+5. Save as `backend/credentials/service-account-key.json`
 
 ### 2. **Environment Configuration**
 
 ```bash
 # Copy environment templates
 cp backend/.env.template backend/.env.development
-cp backend/.env.template backend/.env.staging
-mkdir -p credentials
+mkdir -p backend/credentials
 ```
 
 #### Update Environment Files:
 
 **backend/.env.development:**
 ```env
-GOOGLE_CLIENT_ID=your_dev_google_client_id_here
-GOOGLE_CLIENT_SECRET=your_dev_google_client_secret_here
-GOOGLE_SHEETS_CREDENTIALS_FILE=/app/credentials/dev-credentials.json
+# OAuth Client Credentials (from step 1)
+GOOGLE_CLIENT_ID=your_oauth_client_id
+GOOGLE_CLIENT_SECRET=your_oauth_client_secret
+GOOGLE_REDIRECT_URI=http://localhost:8095/api/v1/auth/callback
+
+# Service Account Key (from step 1)
+GOOGLE_SHEETS_CREDENTIALS_FILE=/app/credentials/service-account-key.json
+
+# Application Settings
 SECRET_KEY=your-secure-secret-key-here
 CORS_ORIGINS=http://localhost:5185
 ```
@@ -69,8 +88,10 @@ CORS_ORIGINS=http://localhost:5185
 **frontend/.env.development:**
 ```env
 VITE_API_URL=http://localhost:8095
-VITE_GOOGLE_CLIENT_ID=your_dev_google_client_id_here
+VITE_GOOGLE_CLIENT_ID=your_oauth_client_id
 ```
+
+> **💡 Important**: The `GOOGLE_CLIENT_ID` must be the same in both backend and frontend environment files
 
 ### 3. **Launch the Application**
 
