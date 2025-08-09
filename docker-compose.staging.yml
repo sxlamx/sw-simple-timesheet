@@ -1,0 +1,52 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.staging
+    container_name: staging-api
+    ports:
+      - "8095:8095"
+    volumes:
+      - ./backend/db:/app/db
+      - ./credentials:/app/credentials:ro
+    env_file:
+      - ./backend/.env.staging
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8095/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.staging
+    container_name: staging-frontend
+    ports:
+      - "5185:5185"
+    env_file:
+      - ./frontend/.env.staging
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - timesheet-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:5185"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+
+networks:
+  timesheet-network:
+    driver: bridge
+
+volumes:
+  db_data:
+    driver: local

@@ -1,0 +1,54 @@
+version: '3.8'
+
+services:
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "8095:8095"
+    volumes:
+      - ./backend:/app
+      - ./backend/db:/app/db
+    environment:
+      - ENV_FILE=.env.development
+    env_file:
+      - ./backend/.env.development
+    depends_on:
+      - db-init
+    networks:
+      - timesheet-network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile.dev
+    ports:
+      - "5185:5185"
+    volumes:
+      - ./frontend:/app
+      - /app/node_modules
+    env_file:
+      - ./frontend/.env.development
+    depends_on:
+      - backend
+    networks:
+      - timesheet-network
+
+  db-init:
+    image: alpine:latest
+    volumes:
+      - ./backend/db:/data
+    command: >
+      sh -c "
+        mkdir -p /data &&
+        chmod 755 /data &&
+        echo 'Database directory initialized'
+      "
+
+networks:
+  timesheet-network:
+    driver: bridge
+
+volumes:
+  db_data:
