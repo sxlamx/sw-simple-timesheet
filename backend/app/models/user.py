@@ -9,6 +9,11 @@ class UserRole(enum.Enum):
     SUPERVISOR = "supervisor"
     ADMIN = "admin"
 
+class EntryType(enum.Enum):
+    NORMAL = "normal"
+    OVERTIME = "overtime"
+    HOLIDAY = "holiday"
+
 class Site(Base):
     __tablename__ = "sites"
     
@@ -109,6 +114,61 @@ class SupervisorDirectReport(Base):
     supervisor = relationship("User", foreign_keys=[supervisor_id], overlaps="supervised_users")
     direct_report = relationship("User", foreign_keys=[direct_report_id], overlaps="supervisor_mappings")
 
+class Project(Base):
+    __tablename__ = "projects"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
+    description = Column(Text, nullable=True)
+    objectives = Column(Text, nullable=True)
+    start_date = Column(DateTime, nullable=True)
+    end_date = Column(DateTime, nullable=True)
+    is_active = Column(Boolean, default=True)
+    project_manager_id = Column(Integer, ForeignKey("users.id"), nullable=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Unique constraint for project name within a site
+    __table_args__ = (UniqueConstraint('site_id', 'name', name='_site_project_uc'),)
+    
+    # Relationships
+    project_manager = relationship("User", foreign_keys=[project_manager_id])
+    timesheet_entries = relationship("TimesheetEntry", back_populates="project_rel")
+
+class SiteRateConfig(Base):
+    __tablename__ = "site_rate_configs"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
+    entry_type = Column(String, nullable=False)
+    hourly_rate = Column(Float, nullable=False)  # Default rate for this entry type
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Unique constraint for entry type within a site
+    __table_args__ = (UniqueConstraint('site_id', 'entry_type', name='_site_entry_type_rate_uc'),)
+
+class ProjectMember(Base):
+    __tablename__ = "project_members"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    role = Column(String, default="member")  # member, lead, contributor
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Unique constraint to prevent duplicate project memberships
+    __table_args__ = (UniqueConstraint('site_id', 'project_id', 'user_id', name='_site_project_user_uc'),)
+    
+    # Relationships
+    project = relationship("Project")
+    user = relationship("User")
+
 class Department(Base):
     __tablename__ = "departments"
     
@@ -163,6 +223,24 @@ class FeedbackResponse(Base):
     feedback = relationship("Feedback")
     user = relationship("User")
 
+class Notification(Base):
+    __tablename__ = "notifications"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)  # Recipient
+    title = Column(String, nullable=False)
+    message = Column(Text, nullable=False)
+    notification_type = Column(String, nullable=False)  # approval, comment, reminder, system
+    related_entity_type = Column(String, nullable=True)  # timesheet_submission, project, etc.
+    related_entity_id = Column(Integer, nullable=True)  # ID of the related entity
+    is_read = Column(Boolean, default=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    read_at = Column(DateTime(timezone=True), nullable=True)
+    
+    # Relationships
+    user = relationship("User")
+
 class TimesheetEntry(Base):
     __tablename__ = "timesheet_entries"
     
@@ -174,7 +252,8 @@ class TimesheetEntry(Base):
     end_time = Column(DateTime, nullable=True)
     break_duration = Column(Integer, default=0)  # in minutes
     total_hours = Column(Float, default=0.0)
-    project = Column(String, nullable=True)
+    project_id = Column(Integer, ForeignKey("projects.id"), nullable=True)  # Link to Project model
+    project = Column(String, nullable=True)  # Keep for backward compatibility
     task_description = Column(Text, nullable=True)
     entry_type = Column(String, default="normal")  # normal, overtime, holiday
     hourly_rate = Column(Float, nullable=True)  # For different entry types
@@ -183,3 +262,4 @@ class TimesheetEntry(Base):
     
     # Relationships
     submission = relationship("TimesheetSubmission", back_populates="entries")
+    project_rel = relationship("Project", back_populates="timesheet_entries")

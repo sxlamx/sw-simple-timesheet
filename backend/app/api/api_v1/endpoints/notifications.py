@@ -1,11 +1,103 @@
-from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks
+from typing import List
+from fastapi import APIRouter, Depends, HTTPException, status, BackgroundTasks, Query
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from app.api.deps import get_current_supervisor
+from app.api.deps import get_current_user, get_current_supervisor, get_site_from_user
 from app.models.user import User as UserModel
+from app.schemas.user import Notification, NotificationCreate, NotificationUpdate
+from app.crud.notification import notification as notification_crud
 from app.services.notification_service import notification_service
 
 router = APIRouter()
+
+@router.get("/", response_model=List[Notification])
+def get_notifications(
+    db: Session = Depends(get_db),
+    skip: int = 0,
+    limit: int = Query(default=50, le=100),
+    unread_only: bool = False,
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Get notifications for the current user"""
+    site_id = get_site_from_user(current_user)
+    notifications = notification_crud.get_by_user(
+        db=db, 
+        user_id=current_user.id, 
+        site_id=site_id, 
+        skip=skip, 
+        limit=limit,
+        unread_only=unread_only
+    )
+    return notifications
+
+@router.get("/unread-count")
+def get_unread_count(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Get count of unread notifications"""
+    site_id = get_site_from_user(current_user)
+    count = notification_crud.get_unread_count(
+        db=db, 
+        user_id=current_user.id, 
+        site_id=site_id
+    )
+    return {"unread_count": count}
+
+@router.put("/{notification_id}/read", response_model=Notification)
+def mark_notification_as_read(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Mark a specific notification as read"""
+    site_id = get_site_from_user(current_user)
+    notification = notification_crud.mark_as_read(
+        db=db, 
+        notification_id=notification_id, 
+        user_id=current_user.id, 
+        site_id=site_id
+    )
+    
+    if not notification:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    
+    return notification
+
+@router.put("/mark-all-read")
+def mark_all_notifications_as_read(
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Mark all notifications as read for the current user"""
+    site_id = get_site_from_user(current_user)
+    updated_count = notification_crud.mark_all_as_read(
+        db=db, 
+        user_id=current_user.id, 
+        site_id=site_id
+    )
+    
+    return {"message": f"Marked {updated_count} notifications as read"}
+
+@router.delete("/{notification_id}")
+def delete_notification(
+    notification_id: int,
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Delete a specific notification"""
+    site_id = get_site_from_user(current_user)
+    success = notification_crud.delete(
+        db=db, 
+        notification_id=notification_id, 
+        user_id=current_user.id, 
+        site_id=site_id
+    )
+    
+    if not success:
+        raise HTTPException(status_code=404, detail="Notification not found")
+    
+    return {"message": "Notification deleted successfully"}
 
 @router.post("/send-reminders")
 async def send_reminder_notifications(

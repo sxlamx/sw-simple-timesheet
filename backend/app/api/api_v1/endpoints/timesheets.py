@@ -1,15 +1,19 @@
 from typing import List
-from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi import APIRouter, Depends, HTTPException, status, UploadFile, File
 from fastapi.responses import Response
 from sqlalchemy.orm import Session
 from pydantic import BaseModel
 from datetime import datetime
+import csv
+import io
 from app.core.database import get_db
 from app.api.deps import get_current_user, get_current_supervisor
 from app.crud.user import timesheet_submission, user
+from app.crud.notification import notification as notification_crud
 from app.schemas.user import TimesheetSubmission, TimesheetSubmissionCreate, TimesheetSubmissionUpdate, TimesheetEntry as TimesheetEntrySchema, TimesheetEntryCreate, TimesheetEntryUpdate
 from app.models.user import TimesheetEntry
 from app.models.user import User as UserModel
+from app.api.deps import get_site_from_user
 from app.services.google_sheets import google_sheets_service
 from app.services.excel_export import excel_export_service
 from app.services.notification_service import notification_service
@@ -155,10 +159,20 @@ async def submit_timesheet(
     
     # Google Sheets integration disabled - database storage only
     
-    # Send notification to supervisor
+    # Create notification for supervisor
     try:
         supervisor = user.get(db=db, id=current_user.supervisor_id) if current_user.supervisor_id else None
         if supervisor:
+            site_id = get_site_from_user(current_user)
+            notification_crud.create_pending_approval_notification(
+                db=db,
+                supervisor_id=supervisor.id,
+                site_id=site_id,
+                timesheet_id=timesheet_id,
+                submitter_name=current_user.full_name
+            )
+            
+            # Also send email notification if service is available
             notification_service.send_timesheet_submitted_notification(
                 timesheet=updated_timesheet,
                 staff_user=current_user,
@@ -208,10 +222,20 @@ async def approve_timesheet(
     
     # Google Sheets integration disabled - database storage only
     
-    # Send notification to staff member
+    # Create notification for staff member
     try:
         staff_member = user.get(db=db, id=timesheet.user_id)
         if staff_member:
+            site_id = get_site_from_user(current_user)
+            notification_crud.create_timesheet_approval_notification(
+                db=db,
+                user_id=staff_member.id,
+                site_id=site_id,
+                timesheet_id=timesheet_id,
+                status="approved"
+            )
+            
+            # Also send email notification if service is available
             notification_service.send_timesheet_approved_notification(
                 timesheet=updated_timesheet,
                 staff_user=staff_member,
@@ -260,10 +284,20 @@ async def reject_timesheet(
     
     # Google Sheets integration disabled - database storage only
     
-    # Send notification to staff member
+    # Create notification for staff member
     try:
         staff_member = user.get(db=db, id=timesheet.user_id)
         if staff_member:
+            site_id = get_site_from_user(current_user)
+            notification_crud.create_timesheet_approval_notification(
+                db=db,
+                user_id=staff_member.id,
+                site_id=site_id,
+                timesheet_id=timesheet_id,
+                status="rejected"
+            )
+            
+            # Also send email notification if service is available
             notification_service.send_timesheet_rejected_notification(
                 timesheet=updated_timesheet,
                 staff_user=staff_member,
@@ -621,4 +655,165 @@ async def export_team_timesheets_to_excel(
         content=excel_data,
         media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
+    )
+
+class BulkTimesheetEntryCreate(BaseModel):
+    date: str  # YYYY-MM-DD format
+    start_time: str = None  # HH:MM format 
+    end_time: str = None  # HH:MM format
+    break_duration: int = 0  # minutes
+    total_hours: float
+    project_id: int = None
+    project: str = None  # fallback
+    task_description: str = None
+    entry_type: str = "normal"
+
+@router.post("/{timesheet_id}/bulk-entries")
+async def create_bulk_timesheet_entries(
+    timesheet_id: int,
+    entries: List[BulkTimesheetEntryCreate],
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Create multiple timesheet entries at once"""
+    from app.crud.user import timesheet_entry
+    from app.schemas.user import TimesheetEntryCreate
+    
+    # Verify timesheet exists and belongs to user
+    timesheet = timesheet_submission.get(db=db, id=timesheet_id)
+    if not timesheet:
+        raise HTTPException(status_code=404, detail="Timesheet not found")
+    
+    if timesheet.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Can only add entries to your own timesheet")
+    
+    if timesheet.status != "draft":
+        raise HTTPException(status_code=400, detail="Can only add entries to draft timesheets")
+    
+    # Convert and create entries
+    created_entries = []
+    for entry_data in entries:
+        try:
+            # Parse date and times
+            from datetime import datetime, time
+            entry_date = datetime.strptime(entry_data.date, '%Y-%m-%d')
+            
+            start_datetime = None
+            end_datetime = None
+            
+            if entry_data.start_time:
+                start_time = datetime.strptime(entry_data.start_time, '%H:%M').time()
+                start_datetime = datetime.combine(entry_date.date(), start_time)
+            
+            if entry_data.end_time:
+                end_time = datetime.strptime(entry_data.end_time, '%H:%M').time()
+                end_datetime = datetime.combine(entry_date.date(), end_time)
+            
+            entry_create = TimesheetEntryCreate(
+                submission_id=timesheet_id,
+                date=entry_date,
+                start_time=start_datetime,
+                end_time=end_datetime,
+                break_duration=entry_data.break_duration,
+                total_hours=entry_data.total_hours,
+                project_id=entry_data.project_id,
+                project=entry_data.project,
+                task_description=entry_data.task_description,
+                entry_type=entry_data.entry_type
+            )
+            
+            created_entry = timesheet_entry.create(db=db, obj_in=entry_create)
+            created_entries.append(created_entry)
+            
+        except ValueError as e:
+            raise HTTPException(status_code=400, detail=f"Invalid date/time format: {e}")
+    
+    return {
+        "message": f"Created {len(created_entries)} timesheet entries",
+        "entries": created_entries
+    }
+
+@router.post("/{timesheet_id}/upload-csv")
+async def upload_timesheet_csv(
+    timesheet_id: int,
+    file: UploadFile = File(...),
+    db: Session = Depends(get_db),
+    current_user: UserModel = Depends(get_current_user)
+):
+    """Upload CSV file with timesheet entries"""
+    
+    # Verify timesheet exists and belongs to user
+    timesheet = timesheet_submission.get(db=db, id=timesheet_id)
+    if not timesheet:
+        raise HTTPException(status_code=404, detail="Timesheet not found")
+    
+    if timesheet.user_id != current_user.id:
+        raise HTTPException(status_code=403, detail="Can only upload to your own timesheet")
+    
+    if timesheet.status != "draft":
+        raise HTTPException(status_code=400, detail="Can only upload to draft timesheets")
+    
+    # Validate file type
+    if not file.filename.lower().endswith('.csv'):
+        raise HTTPException(status_code=400, detail="File must be a CSV")
+    
+    try:
+        # Read CSV content
+        contents = await file.read()
+        csv_string = contents.decode('utf-8')
+        csv_reader = csv.DictReader(io.StringIO(csv_string))
+        
+        # Expected columns: date, start_time, end_time, break_duration, total_hours, project, task_description, entry_type
+        required_columns = ['date', 'total_hours']
+        
+        # Parse CSV entries
+        entries = []
+        for row_num, row in enumerate(csv_reader, 1):
+            # Validate required columns
+            missing_columns = [col for col in required_columns if col not in row or not row[col].strip()]
+            if missing_columns:
+                raise HTTPException(
+                    status_code=400, 
+                    detail=f"Row {row_num}: Missing required columns: {missing_columns}"
+                )
+            
+            entry = BulkTimesheetEntryCreate(
+                date=row['date'].strip(),
+                start_time=row.get('start_time', '').strip() or None,
+                end_time=row.get('end_time', '').strip() or None,
+                break_duration=int(row.get('break_duration', 0) or 0),
+                total_hours=float(row['total_hours'].strip()),
+                project=row.get('project', '').strip() or None,
+                task_description=row.get('task_description', '').strip() or None,
+                entry_type=row.get('entry_type', 'normal').strip() or 'normal'
+            )
+            entries.append(entry)
+        
+        if not entries:
+            raise HTTPException(status_code=400, detail="CSV file is empty or has no valid entries")
+        
+        # Create entries using bulk endpoint
+        return await create_bulk_timesheet_entries(timesheet_id, entries, db, current_user)
+        
+    except UnicodeDecodeError:
+        raise HTTPException(status_code=400, detail="File encoding error. Please ensure the file is UTF-8 encoded.")
+    except csv.Error as e:
+        raise HTTPException(status_code=400, detail=f"CSV parsing error: {e}")
+    except ValueError as e:
+        raise HTTPException(status_code=400, detail=f"Data validation error: {e}")
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Server error: {e}")
+
+@router.get("/csv-template")
+async def get_csv_template():
+    """Download a CSV template for bulk entry"""
+    csv_template = """date,start_time,end_time,break_duration,total_hours,project,task_description,entry_type
+2024-01-01,09:00,17:00,60,8.0,Project Alpha,Development work,normal
+2024-01-02,09:00,19:00,60,10.0,Project Beta,Overtime work,overtime
+2024-01-03,10:00,15:00,30,5.0,Project Gamma,Holiday coverage,holiday"""
+    
+    return Response(
+        content=csv_template,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=timesheet_template.csv"}
     )

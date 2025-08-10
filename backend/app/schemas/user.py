@@ -8,6 +8,11 @@ class UserRole(str, Enum):
     SUPERVISOR = "supervisor"
     ADMIN = "admin"
 
+class EntryType(str, Enum):
+    NORMAL = "normal"
+    OVERTIME = "overtime"
+    HOLIDAY = "holiday"
+
 class SiteBase(BaseModel):
     name: str
     description: Optional[str] = None
@@ -107,8 +112,11 @@ class TimesheetEntryBase(BaseModel):
     end_time: Optional[Union[datetime, str]] = None
     break_duration: int = 0  # in minutes
     total_hours: float = 0.0
-    project: Optional[str] = None
+    project_id: Optional[int] = None
+    project: Optional[str] = None  # Keep for backward compatibility
     task_description: Optional[str] = None
+    entry_type: EntryType = EntryType.NORMAL
+    hourly_rate: Optional[float] = None
 
 class TimesheetEntryCreate(TimesheetEntryBase):
     submission_id: int
@@ -119,14 +127,63 @@ class TimesheetEntryUpdate(BaseModel):
     end_time: Optional[datetime] = None
     break_duration: Optional[int] = None
     total_hours: Optional[float] = None
+    project_id: Optional[int] = None
     project: Optional[str] = None
     task_description: Optional[str] = None
+    entry_type: Optional[EntryType] = None
+    hourly_rate: Optional[float] = None
 
 class TimesheetEntry(TimesheetEntryBase):
     id: int
     submission_id: int
     created_at: datetime
     updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class SiteRateConfigBase(BaseModel):
+    entry_type: EntryType
+    hourly_rate: float
+    is_active: bool = True
+
+class SiteRateConfigCreate(SiteRateConfigBase):
+    site_id: int
+
+class SiteRateConfigUpdate(BaseModel):
+    hourly_rate: Optional[float] = None
+    is_active: Optional[bool] = None
+
+class SiteRateConfig(SiteRateConfigBase):
+    id: int
+    site_id: int
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+    class Config:
+        from_attributes = True
+
+class NotificationBase(BaseModel):
+    title: str
+    message: str
+    notification_type: str  # approval, comment, reminder, system
+    related_entity_type: Optional[str] = None
+    related_entity_id: Optional[int] = None
+
+class NotificationCreate(NotificationBase):
+    site_id: int
+    user_id: int
+
+class NotificationUpdate(BaseModel):
+    is_read: Optional[bool] = None
+
+class Notification(NotificationBase):
+    id: int
+    site_id: int
+    user_id: int
+    is_read: bool
+    created_at: datetime
+    read_at: Optional[datetime] = None
 
     class Config:
         from_attributes = True
