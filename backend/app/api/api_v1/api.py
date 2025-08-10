@@ -1,5 +1,5 @@
 from fastapi import APIRouter
-from app.api.api_v1.endpoints import auth, users, timesheets, timesheet_entries, notifications, feedback, supervisor_mapping, projects
+from app.api.api_v1.endpoints import auth, users, timesheets, timesheet_entries, notifications, feedback, supervisor_mapping, projects, dashboard
 
 api_router = APIRouter()
 
@@ -11,3 +11,4 @@ api_router.include_router(notifications.router, prefix="/notifications", tags=["
 api_router.include_router(feedback.router, prefix="/feedback", tags=["feedback"])
 api_router.include_router(supervisor_mapping.router, prefix="/supervisor-mappings", tags=["supervisor-mapping"])
 api_router.include_router(projects.router, prefix="/projects", tags=["projects"])
+api_router.include_router(dashboard.router, prefix="/dashboard", tags=["dashboard"])
