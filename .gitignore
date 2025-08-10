@@ -220,15 +220,22 @@ frontend/dist/
 frontend/build/
 *.tsbuildinfo
 
-# Environment files
+# Environment files (keep templates only)
 .env
 .env.local
 .env.development.local
 .env.test.local
 .env.production.local
-.env.development
-.env.staging
-.env.production
+
+# Specific environment files with actual credentials
+# Keep only .env.template files in version control
+backend/.env.development
+backend/.env.staging  
+backend/.env.production
+backend/.env.docker
+frontend/.env.development
+frontend/.env.staging
+frontend/.env.production
 
 # Database files
 *.db
