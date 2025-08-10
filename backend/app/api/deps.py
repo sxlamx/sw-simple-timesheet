@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.core.database import get_db
 from app.core.auth import verify_access_token
 from app.crud.user import user
-from app.models.user import User
+from app.models.user import User, UserRole
 
 security = HTTPBearer()
 
@@ -35,10 +35,32 @@ def get_current_supervisor(
     current_user: User = Depends(get_current_user)
 ) -> User:
     """Get current user if they are a supervisor"""
-    if not current_user.is_supervisor:
+    if not (current_user.is_supervisor or current_user.role in [UserRole.SUPERVISOR, UserRole.ADMIN]):
         raise HTTPException(
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Not enough permissions"
+        )
+    return current_user
+
+def get_current_admin(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Get current user if they are an admin"""
+    if current_user.role != UserRole.ADMIN:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Admin access required"
+        )
+    return current_user
+
+def get_current_supervisor_or_admin(
+    current_user: User = Depends(get_current_user)
+) -> User:
+    """Get current user if they are a supervisor or admin"""
+    if current_user.role not in [UserRole.SUPERVISOR, UserRole.ADMIN]:
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Supervisor or Admin access required"
         )
     return current_user
 

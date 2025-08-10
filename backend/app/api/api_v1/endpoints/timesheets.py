@@ -7,7 +7,8 @@ from datetime import datetime
 from app.core.database import get_db
 from app.api.deps import get_current_user, get_current_supervisor
 from app.crud.user import timesheet_submission, user
-from app.schemas.user import TimesheetSubmission, TimesheetSubmissionCreate, TimesheetSubmissionUpdate
+from app.schemas.user import TimesheetSubmission, TimesheetSubmissionCreate, TimesheetSubmissionUpdate, TimesheetEntry as TimesheetEntrySchema, TimesheetEntryCreate, TimesheetEntryUpdate
+from app.models.user import TimesheetEntry
 from app.models.user import User as UserModel
 from app.services.google_sheets import google_sheets_service
 from app.services.excel_export import excel_export_service
@@ -33,20 +34,11 @@ async def create_timesheet(
     db: Session = Depends(get_db),
     current_user: UserModel = Depends(get_current_user)
 ):
-    """Create a new Google Sheet timesheet for the user"""
+    """Create a new timesheet for the user (database storage only)"""
     
-    # Create Google Sheet
-    sheet_url = google_sheets_service.create_timesheet_sheet(
-        user_email=current_user.email,
-        year=request.year,
-        month=request.month
-    )
-    
-    if not sheet_url:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail="Failed to create Google Sheet"
-        )
+    # Google Sheets integration disabled - use database-only storage
+    print(f"Creating database-only timesheet for {current_user.email}")
+    sheet_url = "database_only_storage"  # Placeholder URL since we're using database only
     
     # Calculate period dates
     from datetime import datetime, date
@@ -144,8 +136,10 @@ async def submit_timesheet(
             detail="Timesheet is not in draft status"
         )
     
-    # Calculate total hours from Google Sheet
-    total_hours = google_sheets_service.calculate_total_hours(timesheet.google_sheet_url)
+    # Calculate total hours from database entries
+    from app.models.user import TimesheetEntry
+    entries = db.query(TimesheetEntry).filter(TimesheetEntry.submission_id == timesheet.id).all()
+    total_hours = sum(entry.total_hours or 0 for entry in entries)
     
     # Update status to submitted
     update_data = TimesheetSubmissionUpdate(
@@ -159,8 +153,7 @@ async def submit_timesheet(
         obj_in=update_data
     )
     
-    # Update Google Sheet status
-    google_sheets_service.update_timesheet_status(timesheet.google_sheet_url, "submitted")
+    # Google Sheets integration disabled - database storage only
     
     # Send notification to supervisor
     try:
@@ -209,11 +202,11 @@ async def approve_timesheet(
         db=db, 
         db_obj=timesheet, 
         obj_in=update_data,
-        reviewer_id=current_user.id
+        reviewer_id=current_user.id,
+        reviewer_name=current_user.full_name
     )
     
-    # Update Google Sheet status
-    google_sheets_service.update_timesheet_status(timesheet.google_sheet_url, "approved")
+    # Google Sheets integration disabled - database storage only
     
     # Send notification to staff member
     try:
@@ -261,11 +254,11 @@ async def reject_timesheet(
         db=db, 
         db_obj=timesheet, 
         obj_in=update_data,
-        reviewer_id=current_user.id
+        reviewer_id=current_user.id,
+        reviewer_name=current_user.full_name
     )
     
-    # Update Google Sheet status
-    google_sheets_service.update_timesheet_status(timesheet.google_sheet_url, "rejected")
+    # Google Sheets integration disabled - database storage only
     
     # Send notification to staff member
     try:
@@ -315,15 +308,28 @@ async def get_timesheet_data(
             detail="Not enough permissions"
         )
     
-    # Get data from Google Sheets
-    timesheet_data = google_sheets_service.get_timesheet_data(timesheet.google_sheet_url)
+    # Get data from database entries
+    from app.models.user import TimesheetEntry
+    entries = db.query(TimesheetEntry).filter(TimesheetEntry.submission_id == timesheet.id).all()
+    
+    timesheet_data = []
+    for entry in entries:
+        timesheet_data.append({
+            "id": entry.id,
+            "date": entry.date.strftime('%Y-%m-%d') if entry.date else '',
+            "start_time": entry.start_time.strftime('%H:%M:%S') if entry.start_time else '',
+            "end_time": entry.end_time.strftime('%H:%M:%S') if entry.end_time else '',
+            "break_duration": entry.break_duration or 0,
+            "total_hours": entry.total_hours or 0,
+            "project": entry.project or '',
+            "task_description": entry.task_description or ''
+        })
     
     return {
         "timesheet_id": timesheet_id,
-        "sheet_url": timesheet.google_sheet_url,
         "status": timesheet.status,
         "data": timesheet_data,
-        "total_hours": sum(float(entry.get('total_hours', 0)) for entry in timesheet_data)
+        "total_hours": sum(entry.total_hours or 0 for entry in entries)
     }
 
 @router.get("/{timesheet_id}/export")

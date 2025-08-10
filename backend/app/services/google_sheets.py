@@ -6,6 +6,9 @@ from typing import List, Dict, Optional, Any
 from datetime import datetime
 from app.core.config import settings
 
+# Shared folder ID extracted from the Google Drive URL
+SHARED_FOLDER_ID = "1osLw7ztdjYZlCoofS79HvYW7_WxXpspx"
+
 class GoogleSheetsService:
     def __init__(self):
         self.credentials = None
@@ -28,59 +31,43 @@ class GoogleSheetsService:
                 
                 # Initialize Google Sheets API service
                 self.service = build('sheets', 'v4', credentials=self.credentials)
+                print(f"Google Sheets service initialized successfully")
         except Exception as e:
             print(f"Warning: Could not initialize Google Sheets service: {e}")
     
-    def create_timesheet_sheet(self, user_email: str, year: int, month: int) -> Optional[str]:
-        """Create a new Google Sheet for user timesheet"""
+    def test_sheet_creation(self) -> bool:
+        """Test if we can create a basic Google Sheet in shared folder"""
         if not self.gc:
-            raise Exception("Google Sheets service not initialized")
-        
-        sheet_title = f"Timesheet_{user_email}_{year}_{month:02d}"
+            return False
         
         try:
-            # Create new spreadsheet
-            spreadsheet = self.gc.create(sheet_title)
+            test_sheet_name = "Test_Sheet_" + str(datetime.now().timestamp())
             
-            # Set up the timesheet template
-            worksheet = spreadsheet.sheet1
+            # Create in root drive first (to avoid quota issues)
+            test_sheet = self.gc.create(test_sheet_name)
+            print(f"Test sheet created successfully: {test_sheet.id}")
             
-            # Set up headers
-            headers = [
-                "Date", "Start Time", "End Time", "Break Duration (mins)", 
-                "Total Hours", "Project", "Task Description", "Status"
-            ]
-            worksheet.update('A1:H1', [headers])
-            
-            # Format the header row
-            worksheet.format('A1:H1', {
-                "backgroundColor": {"red": 0.2, "green": 0.6, "blue": 1.0},
-                "textFormat": {"bold": True, "foregroundColor": {"red": 1.0, "green": 1.0, "blue": 1.0}}
-            })
-            
-            # Add some sample data structure for the month
-            sample_data = []
-            import calendar
-            days_in_month = calendar.monthrange(year, month)[1]
-            
-            for day in range(1, days_in_month + 1):
-                date_str = f"{year}-{month:02d}-{day:02d}"
-                sample_data.append([date_str, "", "", "", "", "", "", ""])
-            
-            if sample_data:
-                worksheet.update(f'A2:H{len(sample_data) + 1}', sample_data)
-            
-            # Share the sheet with the user
+            # Try to delete the test sheet to clean up immediately
             try:
-                spreadsheet.share(user_email, perm_type='user', role='writer')
-            except Exception as e:
-                print(f"Warning: Could not share sheet with user {user_email}: {e}")
-            
-            return spreadsheet.url
-            
+                from googleapiclient.discovery import build
+                drive_service = build('drive', 'v3', credentials=self.credentials)
+                drive_service.files().delete(fileId=test_sheet.id).execute()
+                print(f"Test sheet {test_sheet.id} deleted successfully")
+            except Exception as cleanup_error:
+                print(f"Could not clean up test sheet: {cleanup_error}")
+                
+            return True
         except Exception as e:
-            print(f"Error creating timesheet sheet: {e}")
-            return None
+            print(f"Test sheet creation failed: {e}")
+            return False
+
+    def create_timesheet_sheet(self, user_email: str, year: int, month: int) -> Optional[str]:
+        """Google Sheets disabled - using database-only storage"""
+        print(f"Google Sheets integration disabled - using database-only storage")
+        
+        # Return None to indicate no Google Sheet will be created
+        # The system will rely entirely on SQLite database storage
+        return None
     
     def get_timesheet_data(self, spreadsheet_url: str) -> List[Dict[str, Any]]:
         """Get timesheet data from Google Sheet"""
@@ -165,11 +152,13 @@ class GoogleSheetsService:
         if not self.gc:
             raise Exception("Google Sheets service not initialized")
         
-        sheet_title = f"Team_Timesheets_{supervisor_email}_{datetime.now().strftime('%Y_%m')}"
+        # Extract supervisor login ID
+        supervisor_login_id = supervisor_email.split('@')[0]
+        sheet_title = f"{supervisor_login_id}_Team_Timesheets_{datetime.now().strftime('%Y_%m')}"
         
         try:
-            # Create new spreadsheet
-            spreadsheet = self.gc.create(sheet_title)
+            # Create new spreadsheet in shared folder
+            spreadsheet = self.gc.create(sheet_title, folder_id=SHARED_FOLDER_ID)
             worksheet = spreadsheet.sheet1
             
             # Set up headers for aggregate view

@@ -97,12 +97,16 @@ async def google_auth_callback(code: str, db: Session = Depends(get_db)):
         "redirect_uri": settings.GOOGLE_REDIRECT_URI,
     }
     
+    
     token_response = requests.post(token_url, data=token_data)
     
     if token_response.status_code != 200:
+        # Log the detailed error for debugging
+        error_detail = f"Token exchange failed: {token_response.status_code} - {token_response.text}"
+        print(f"OAuth Error: {error_detail}")
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Failed to exchange authorization code"
+            detail=f"Failed to exchange authorization code: {error_detail}"
         )
     
     tokens = token_response.json()

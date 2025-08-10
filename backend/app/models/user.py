@@ -1,55 +1,126 @@
-from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Float
+from sqlalchemy import Column, Integer, String, Boolean, DateTime, ForeignKey, Text, Float, Enum, UniqueConstraint
+import enum
 from sqlalchemy.orm import relationship
 from sqlalchemy.sql import func
 from app.core.database import Base
+
+class UserRole(enum.Enum):
+    STAFF = "staff"
+    SUPERVISOR = "supervisor"
+    ADMIN = "admin"
+
+class Site(Base):
+    __tablename__ = "sites"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    name = Column(String, nullable=False, index=True)
+    description = Column(Text, nullable=True)
+    domain = Column(String, nullable=True, index=True)  # For domain-based site assignment
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    users = relationship("User", back_populates="site")
+    site_members = relationship("SiteMember", back_populates="site")
+
+class SiteMember(Base):
+    __tablename__ = "site_members"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False)
+    user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    role = Column(Enum(UserRole), default=UserRole.STAFF, nullable=False)
+    is_active = Column(Boolean, default=True)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Unique constraint to prevent duplicate memberships
+    __table_args__ = (UniqueConstraint('site_id', 'user_id', name='_site_user_uc'),)
+    
+    # Relationships
+    site = relationship("Site", back_populates="site_members")
+    user = relationship("User", back_populates="site_memberships")
 
 class User(Base):
     __tablename__ = "users"
     
     id = Column(Integer, primary_key=True, index=True)
-    email = Column(String, unique=True, index=True, nullable=False)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
+    email = Column(String, index=True, nullable=False)  # Remove unique constraint for multi-tenancy
     full_name = Column(String, nullable=False)
-    google_id = Column(String, unique=True, index=True, nullable=False)
+    google_id = Column(String, index=True, nullable=True)  # Allow null for other auth methods
+    keycloak_id = Column(String, index=True, nullable=True)  # For Keycloak authentication
     profile_picture = Column(String, nullable=True)
     is_active = Column(Boolean, default=True)
-    is_supervisor = Column(Boolean, default=False)
+    role = Column(Enum(UserRole), default=UserRole.STAFF, nullable=False)
+    is_supervisor = Column(Boolean, default=False)  # Keep for backward compatibility
     department = Column(String, nullable=True)
     supervisor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     google_sheet_id = Column(String, nullable=True)  # Individual timesheet Google Sheet
     created_at = Column(DateTime(timezone=True), server_default=func.now())
     updated_at = Column(DateTime(timezone=True), onupdate=func.now())
     
+    # Unique constraint for email within a site
+    __table_args__ = (UniqueConstraint('site_id', 'email', name='_site_email_uc'),)
+    
     # Relationships
+    site = relationship("Site", back_populates="users")
+    site_memberships = relationship("SiteMember", back_populates="user")
     supervisor = relationship("User", remote_side=[id], backref="staff_members")
-    timesheet_submissions = relationship("TimesheetSubmission", back_populates="user")
+    timesheet_submissions = relationship("TimesheetSubmission", foreign_keys="TimesheetSubmission.user_id", back_populates="user")
+    
+    # Supervisor-Direct Report relationships
+    supervised_users = relationship("SupervisorDirectReport", foreign_keys="SupervisorDirectReport.supervisor_id")
+    supervisor_mappings = relationship("SupervisorDirectReport", foreign_keys="SupervisorDirectReport.direct_report_id")
 
 class TimesheetSubmission(Base):
     __tablename__ = "timesheet_submissions"
     
     id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     period_start = Column(DateTime, nullable=False)
     period_end = Column(DateTime, nullable=False)
-    google_sheet_url = Column(String, nullable=False)
-    status = Column(String, default="pending")  # pending, approved, rejected
+    google_sheet_url = Column(String, nullable=True)  # No longer required
+    status = Column(String, default="draft")  # draft, pending, approved, rejected
     submitted_at = Column(DateTime(timezone=True), server_default=func.now())
     reviewed_at = Column(DateTime(timezone=True), nullable=True)
-    reviewed_by = Column(Integer, ForeignKey("users.id"), nullable=True)
+    reviewed_by = Column(Integer, nullable=True)  # Keep for backward compatibility but no longer FK
+    reviewed_by_name = Column(String, nullable=True)  # Store reviewer name directly
     review_notes = Column(String, nullable=True)
     total_hours = Column(Integer, nullable=True)  # Total hours for the period
     
     # Relationships
     user = relationship("User", foreign_keys=[user_id], back_populates="timesheet_submissions")
-    reviewer = relationship("User", foreign_keys=[reviewed_by])
+    entries = relationship("TimesheetEntry", back_populates="submission")
+
+class SupervisorDirectReport(Base):
+    __tablename__ = "supervisor_direct_reports"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
+    supervisor_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    direct_report_id = Column(Integer, ForeignKey("users.id"), nullable=False)
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    supervisor = relationship("User", foreign_keys=[supervisor_id], overlaps="supervised_users")
+    direct_report = relationship("User", foreign_keys=[direct_report_id], overlaps="supervisor_mappings")
 
 class Department(Base):
     __tablename__ = "departments"
     
     id = Column(Integer, primary_key=True, index=True)
-    name = Column(String, unique=True, nullable=False)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
+    name = Column(String, nullable=False)
     description = Column(String, nullable=True)
     supervisor_id = Column(Integer, ForeignKey("users.id"), nullable=True)
     created_at = Column(DateTime(timezone=True), server_default=func.now())
+    
+    # Unique constraint for department name within a site
+    __table_args__ = (UniqueConstraint('site_id', 'name', name='_site_department_uc'),)
     
     # Relationships
     supervisor = relationship("User")
@@ -58,6 +129,7 @@ class Feedback(Base):
     __tablename__ = "feedback"
     
     id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     category = Column(String, nullable=False)  # 'app', 'feature', 'bug', 'suggestion'
     type = Column(String, nullable=False)  # 'rating', 'comment', 'feature_request'
@@ -80,6 +152,7 @@ class FeedbackResponse(Base):
     __tablename__ = "feedback_responses"
     
     id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
     feedback_id = Column(Integer, ForeignKey("feedback.id"), nullable=False)
     user_id = Column(Integer, ForeignKey("users.id"), nullable=False)
     message = Column(Text, nullable=False)
@@ -89,3 +162,24 @@ class FeedbackResponse(Base):
     # Relationships
     feedback = relationship("Feedback")
     user = relationship("User")
+
+class TimesheetEntry(Base):
+    __tablename__ = "timesheet_entries"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    site_id = Column(Integer, ForeignKey("sites.id"), nullable=False, index=True)
+    submission_id = Column(Integer, ForeignKey("timesheet_submissions.id"), nullable=False)
+    date = Column(DateTime, nullable=False)
+    start_time = Column(DateTime, nullable=True)
+    end_time = Column(DateTime, nullable=True)
+    break_duration = Column(Integer, default=0)  # in minutes
+    total_hours = Column(Float, default=0.0)
+    project = Column(String, nullable=True)
+    task_description = Column(Text, nullable=True)
+    entry_type = Column(String, default="normal")  # normal, overtime, holiday
+    hourly_rate = Column(Float, nullable=True)  # For different entry types
+    created_at = Column(DateTime(timezone=True), server_default=func.now())
+    updated_at = Column(DateTime(timezone=True), onupdate=func.now())
+    
+    # Relationships
+    submission = relationship("TimesheetSubmission", back_populates="entries")
